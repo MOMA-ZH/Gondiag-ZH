@@ -155,12 +155,12 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 
 /* ── Écran projets ── */
 .projects-list{margin-top:8px}
-.project-row{background:var(--white);border:1px solid var(--bl);border-radius:4px;padding:13px 16px;margin-bottom:8px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:border-color .15s}
+.project-row{background:var(--white);border:1px solid var(--bl);border-radius:4px;padding:13px 16px;margin-bottom:8px;display:flex;align-items:flex-start;gap:12px;cursor:pointer;transition:border-color .15s;flex-wrap:wrap}
 .project-row:hover{border-color:var(--g-main);background:#FAFFF0}
 .project-info{flex:1;min-width:0}
 .project-name{font-size:15px;font-weight:700;color:var(--g-dark)}
 .project-meta{font-size:12px;color:var(--text2);margin-top:2px}
-.project-actions{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap}
+.project-actions{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;align-items:center}
 .empty-state{text-align:center;padding:40px 20px;color:var(--text2);font-size:14px}
 .empty-icon{font-size:36px;margin-bottom:10px}
 
@@ -294,6 +294,11 @@ textarea.finput{resize:vertical}
   .geppa-item{padding:5px 7px;min-width:38px}
   .geppa-lbl{font-size:13px}
   .geppa-zh{font-size:10px}
+
+  /* Carte projet — actions sous le contenu */
+  .project-row{flex-direction:column;align-items:stretch}
+  .project-actions{width:100%;justify-content:flex-end;border-top:1px solid var(--bl);padding-top:10px;margin-top:8px}
+  .project-actions .btn{flex:1}
 }
 </style>
 </head>
@@ -914,9 +919,10 @@ async function exportWord(project){
                   margins:{top:0,bottom:0,left:0,right:0},
                   children:[new Paragraph({
                     alignment: AlignmentType.CENTER,
+                    spacing:{before:0,after:0},
                     children: p.photoDataUri ? [new ImageRun({
                       data: p.photoDataUri,
-                      transformation: {width:480, height:320},
+                      transformation: {width:316, height:210},
                       type: (p.photoType||"image/jpeg").split("/")[1]
                     })] : [new TextRun({text:""})]
                   })]
@@ -1249,13 +1255,9 @@ function SondageView({sondage, onUpdate, onDelete, canDelete, onAddBis}){
     e.target.value='';
     const reader=new FileReader();
     reader.onload=ev=>{
-      const dataUri=ev.target.result;
-      const img=new window.Image();
-      img.onload=()=>{
-        const w=img.naturalWidth, h=img.naturalHeight;
+      compressImage(ev.target.result, 760, 1280, 0.82, 127/213).then(({dataUri,w,h})=>{
         onUpdate(s=>({...s, photo:dataUri, photoW:w, photoH:h}));
-      };
-      img.src=dataUri;
+      });
     };
     reader.readAsDataURL(f);
   };
@@ -1623,12 +1625,7 @@ async function exportWordProject(project){
         const bytes = new Uint8Array(binary.length);
         for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
         const isJpeg = s.photo.startsWith("data:image/jpeg") || s.photo.startsWith("data:image/jpg");
-        const photoImg = await new Promise(res => {
-          const im = new window.Image();
-          im.onload = () => res(im);
-          im.src = s.photo;
-        });
-        const ratio = photoImg.naturalWidth / photoImg.naturalHeight;
+        const ratio = 127/213;
         const dispW = FRAME_W_PT;
         const dispH = Math.round(FRAME_W_PT / ratio);
         // Replace default grey frame with actual photo, no outer table needed
@@ -1794,8 +1791,51 @@ function loadProjects(){
   try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]'); }
   catch(e){ return []; }
 }
+function compressImage(dataUri, maxW, maxH, quality, cropRatio){
+  // cropRatio = targetW/targetH — si fourni, rogner au centre avant de redimensionner
+  return new Promise(resolve=>{
+    const img=new window.Image();
+    img.onload=()=>{
+      let sw=img.naturalWidth, sh=img.naturalHeight;
+      let sx=0, sy=0;
+      if(cropRatio){
+        const imgRatio=sw/sh;
+        if(imgRatio>cropRatio){ // trop large → rogner sur les côtés
+          sw=Math.round(sh*cropRatio);
+          sx=Math.round((img.naturalWidth-sw)/2);
+        } else { // trop haut → rogner en haut et bas
+          sh=Math.round(sw/cropRatio);
+          sy=Math.round((img.naturalHeight-sh)/2);
+        }
+      }
+      const ratio=Math.min(maxW/sw, maxH/sh, 1);
+      const w=Math.round(sw*ratio), h=Math.round(sh*ratio);
+      const canvas=document.createElement('canvas');
+      canvas.width=w; canvas.height=h;
+      canvas.getContext('2d').drawImage(img,sx,sy,sw,sh,0,0,w,h);
+      resolve({dataUri:canvas.toDataURL('image/jpeg',quality), w, h});
+    };
+    img.src=dataUri;
+  });
+}
+
 function saveProjects(projects){
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+  } catch(e){
+    console.warn('localStorage quota exceeded:', e);
+    // Tentative de sauvegarde sans les photos
+    const slim = projects.map(p=>({...p,
+      placettes:(p.placettes||[]).map(pl=>({...pl,photoDataUri:null})),
+      sondages:(p.sondages||[]).map(s=>({...s,photo:null}))
+    }));
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
+      alert('Espace de stockage insuffisant — les photos n\'ont pas pu être sauvegardées. Exportez votre projet régulièrement.');
+    } catch(e2){
+      console.error('localStorage save failed completely:', e2);
+    }
+  }
 }
 
 // Projet unifié : placettes (bota) + sondages (pedo)
@@ -2390,14 +2430,10 @@ function BotaContent({project, placettes, safeIdx, setIdx, pl, result, updPl, ad
     e.target.value='';
     const reader=new FileReader();
     reader.onload=ev=>{
-      const dataUri=ev.target.result;
-      const img=new window.Image();
-      img.onload=()=>{
-        const w=img.naturalWidth, h=img.naturalHeight;
-        const type=f.type||'image/jpeg';
+      compressImage(ev.target.result, 1440, 960, 0.82, 3/2).then(({dataUri,w,h})=>{
+        const type='image/jpeg';
         updPl(p=>({...p, photoDataUri:dataUri, photoType:type, photoW:w, photoH:h}));
-      };
-      img.src=dataUri;
+      });
     };
     reader.readAsDataURL(f);
   };
