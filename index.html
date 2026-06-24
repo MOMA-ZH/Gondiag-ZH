@@ -789,8 +789,9 @@ async function exportWord(project){
       ]));
       items.forEach(sp=>{
         const b = sp.dominante;
+        const col = sp.zh?{color:"3399FF"}:{};
         rows.push(trow([
-          tc(para(run(sp.espece,{bold:b,italic:true,sz:14}),{indent:{left:80}}),{width:W[0]}),
+          tc(para(run(sp.espece,{bold:b,italic:true,sz:14,...col}),{indent:{left:80}}),{width:W[0]}),
           tc(para(run(sp.recouvrement+"%",{bold:b,sz:14}),{jc:AlignmentType.CENTER}),{width:W[1]}),
           tc(para(run(sp.cumul+"%",{bold:b,sz:14}),{jc:AlignmentType.CENTER}),{width:W[2]}),
         ]));
@@ -969,7 +970,8 @@ async function exportWord(project){
     const blob = await Packer.toBlob(doc);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `ZH_${project.nom.replace(/[^a-zA-Z0-9]/g,"_")}_${project.date||"rapport"}.docx`;
+    const clean = s => (s||'').replace(/[^a-zA-Z0-9À-ÿ]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'');
+    a.download = `${clean(project.nom)}_${clean(project.client)}_Rapport_Botanique.docx`;
     a.click();
 
   } catch(e){
@@ -999,6 +1001,11 @@ function B_exportGeoJSON(project){
 
 // ── Constantes GEPPA ─────────────────────────────────────────────────────────
 const ZH_GEPPA = new Set(['IVd','Va','Vb','Vc','Vd','VIa','VIb','VIc','VId','H']);
+const NONZH_GEPPA = new Set(['I','II','IIIa','IIIb','IVa','IVb','IVc']);
+const SPECIAL_GEPPA = {
+  'Anthropique': {verdict:'non', label:'Sol anthropique — critère pédologique non applicable'},
+  'Brunisol':    {verdict:'indet', label:'Brunisol — sol insuffisamment hydromorphe pour conclure'},
+};
 const GEPPA_GROUPS = [
   ['Ia','Ib'],['IIa','IIb'],['IIIa','IIIb'],
   ['IVa','IVb','IVc','IVd'],
@@ -1017,40 +1024,56 @@ function evaluateZH(horizons, profSondage, geppa){
   const rules=[], warnings=[];
   if(horizons.length===0 && !geppa) return {verdict:null, rules:[], warnings:[]};
   let verdict='non';
-  if(profSondage < 80) warnings.push('Sondage < 80 cm : règle 4 non évaluable.');
+
+  // Refus de tarière avant 80 cm → règle 4 non évaluable
+  const refusH = horizons.find(h=>h.refusTariere);
+  const refusProf = refusH ? refusH.profFin : null;
+  if(refusProf!==null && refusProf<80) warnings.push('⚠ Refus de tarière à '+refusProf+' cm (< 80 cm) : règle 4 non évaluable.');
+  else if(profSondage < 80) warnings.push('Sondage < 80 cm : règle 4 non évaluable.');
+
+  // R1 — histosols
   let hCumul=0, hStart=null;
   for(const h of horizons){
     if(h.histique){ if(hStart===null) hStart=h.profDebut; hCumul+=(h.profFin-h.profDebut); if(hCumul>=50&&hStart<50){ rules.push('R1 : horizon histique < 50 cm, épaisseur ≥ 50 cm'); verdict='zh'; } }
     else{ hCumul=0; hStart=null; }
   }
-  for(const h of horizons){ if(h.reductique&&(h.reductSig!==false)&&h.profDebut<50){ rules.push('R2 : traits réductiques à '+h.profDebut+' cm (< 50 cm)'); verdict='zh'; break; } }
-  for(const h of horizons){ if(h.redoxique&&(h.redoxSig!==false)&&h.profDebut<25&&h.intensification){ rules.push('R3 : traits rédoxiques à '+h.profDebut+' cm (< 25 cm), s\'intensifiant'); verdict='zh'; break; } }
-  const hasRedox50=horizons.some(h=>h.redoxique&&h.profDebut<50);
+  // R2 — réductiques < 50 cm (significatifs)
+  for(const h of horizons){ if(h.reductique&&h.reductSig===true&&h.profDebut<50){ rules.push('R2 : traits réductiques à '+h.profDebut+' cm (< 50 cm)'); verdict='zh'; break; } }
+  // R3 — rédoxiques < 25 cm s'intensifiant (significatifs)
+  for(const h of horizons){ if(h.redoxique&&h.redoxSig===true&&h.profDebut<25&&h.intensification){ rules.push('R3 : traits rédoxiques à '+h.profDebut+' cm (< 25 cm), s\'intensifiant'); verdict='zh'; break; } }
+  // R4 — rédoxiques < 50 cm (significatifs) + réductiques entre 80 et 120 cm
+  const hasRedox50 = horizons.some(h=>h.redoxique&&h.redoxSig===true&&h.profDebut<50);
   if(hasRedox50){
-    if(profSondage>=80){ if(horizons.some(h=>h.reductique&&h.profDebut<120&&h.profFin>80)){ rules.push('R4 : rédoxiques < 50 cm + réductiques entre 80 et 120 cm'); verdict='zh'; } }
-    else if(verdict==='non') verdict='indet';
+    const probeOk = refusProf!==null ? refusProf>=80 : profSondage>=80;
+    if(probeOk){
+      if(horizons.some(h=>h.reductique&&h.reductSig===true&&h.profDebut>=80&&h.profDebut<120)){ rules.push('R4 : rédoxiques < 50 cm + réductiques entre 80 et 120 cm'); verdict='zh'; }
+    } else if(verdict==='non') verdict='indet';
   }
-  if(geppa && ZH_GEPPA.has(geppa) && verdict==='non'){
-    rules.push('GEPPA '+geppa+' : classe indicatrice de zone humide');
-    verdict='zh';
+  // GEPPA
+  if(geppa){
+    if(ZH_GEPPA.has(geppa) && verdict==='non'){
+      rules.push('GEPPA '+geppa+' : classe indicatrice de zone humide');
+      verdict='zh';
+    } else if(SPECIAL_GEPPA[geppa]){
+      if(verdict==='non'){ verdict=SPECIAL_GEPPA[geppa].verdict; rules.push(SPECIAL_GEPPA[geppa].label); }
+    }
   }
-  if(geppa&&ZH_GEPPA.has(geppa)&&verdict==="non"){
-    rules.push("GEPPA "+geppa+" : classe indicatrice de zone humide");
-    verdict="zh";
-  }
-  return {verdict,rules,warnings};
+  return {verdict, rules, warnings};
 }
 
 function geppaIndicatif(horizons){ if(!horizons||horizons.length===0) return null;
-  if(!horizons||horizons.length===0) return null;
-  const fr=horizons.find(h=>h.redoxique&&(h.redoxSig!==false));
-  const fd=horizons.find(h=>h.reductique&&(h.reductSig!==false));
+  // Case non cochée = non significatif
+  const fr=horizons.find(h=>h.redoxique&&h.redoxSig===true);
+  const fd=horizons.find(h=>h.reductique&&h.reductSig===true);
   const hist=horizons.some(h=>h.histique);
   if(hist) return 'H';
   if(fd&&fd.profDebut<25) return 'Vd';
   if(fd&&fd.profDebut<50) return 'Va–Vc';
   if(fr&&fr.profDebut<25&&fr.intensification) return 'IVd';
-  if(fr&&fr.profDebut<50&&horizons.some(h=>h.reductique&&h.profDebut<120&&h.profFin>80)) return 'IVd';
+  const refusH=horizons.find(h=>h.refusTariere);
+  const refusProf=refusH?refusH.profFin:null;
+  const probeOk=refusProf!==null?refusProf>=80:true;
+  if(fr&&fr.profDebut<50&&probeOk&&horizons.some(h=>h.reductique&&h.reductSig===true&&h.profDebut>=80&&h.profDebut<120)) return 'IVd';
   if(fr&&fr.profDebut<25) return 'IVc';
   if(fr&&fr.profDebut<50) return 'IVb';
   if(fr) return 'IVa';
@@ -1059,74 +1082,91 @@ function geppaIndicatif(horizons){ if(!horizons||horizons.length===0) return nul
 
 // ── Description automatique ───────────────────────────────────────────────────
 function genDescription(horizons, observations){
+  if(!horizons||horizons.length===0) return '';
   const lines=[];
+  const lastH=horizons[horizons.length-1];
 
-  // Texture
+  // ── Texture / profil général ──────────────────────────────────────────────
   const textures=[...new Set(horizons.map(h=>h.texture).filter(Boolean))];
-  if(textures.length===1) lines.push('Profil '+textures[0]);
-  else if(textures.length>1) lines.push('Profil '+textures.join(' \xe0 '));
+  if(textures.length===1) lines.push('Profil '+textures[0]+' sur l\u2019ensemble du sondage.');
+  else if(textures.length>1) lines.push('Profil '+textures.join(' à ')+' de haut en bas.');
 
-  // Regroupe les horizons consecutifs portant un trait
+  // ── Outil pour regrouper les horizons consécutifs portant un trait ────────
   function groupTrait(field){
-    const groups=[], lastH=horizons[horizons.length-1];
+    const groups=[];
     let cur=null;
     for(const h of horizons){
       if(h[field]){
-        if(!cur) cur={from:h.profDebut,to:h.profFin,intensif:!!h.intensification};
+        if(!cur) cur={from:h.profDebut,to:h.profFin,intensif:!!h.intensification,sig:h.redoxSig,reductSig:h.reductSig};
         else{ cur.to=h.profFin; if(h.intensification) cur.intensif=true; }
       } else { if(cur){ groups.push(cur); cur=null; } }
     }
     if(cur) groups.push(cur);
-    return {groups, lastH};
+    return groups;
   }
 
-  function phraseRange(label, g, lastH){
+  function range(g){
     const toEnd=g.to===lastH.profFin;
-    if(g.from===0 && toEnd) return label+' sur l\u2019ensemble du profil';
-    if(g.from===0) return label+' de 0 cm \xe0 '+g.to+' cm';
-    if(toEnd) return label+' \xe0 partir de '+g.from+' cm';
-    return label+' de '+g.from+' cm \xe0 '+g.to+' cm';
+    if(g.from===0&&toEnd) return 'sur l\u2019ensemble du profil';
+    if(g.from===0) return 'de 0 à '+g.to+' cm';
+    if(toEnd) return 'à partir de '+g.from+' cm';
+    return 'de '+g.from+' à '+g.to+' cm';
   }
 
-  // R\xe9doxiques
-  if(!horizons.some(h=>h.redoxique)){
-    lines.push('Absence de traits r\xe9doxiques');
+  // ── Traits rédoxiques ─────────────────────────────────────────────────────
+  const anyRedox=horizons.some(h=>h.redoxique);
+  if(!anyRedox){
+    lines.push('Absence de traits rédoxiques.');
   } else {
-    const {groups,lastH}=groupTrait('redoxique');
+    const groups=groupTrait('redoxique');
     groups.forEach(g=>{
-      let p=phraseRange("Traces d\u2019oxyd\xe9r\xe9duction",g,lastH);
-      if(g.intensif) p+=", s\u2019intensifiant en profondeur";
-      lines.push(p);
+      const dep=g.from===0?'dès la surface':'à '+g.from+' cm de profondeur';
+      const sig=g.sig===true?' (significatifs)':' (non significatifs)';
+      let phrase='Présence de traits rédoxiques '+range(g)+sig;
+      if(g.intensif) phrase+=', s\u2019intensifiant en profondeur';
+      lines.push(phrase+'.');
     });
   }
 
-  // R\xe9ductiques
-  if(!horizons.some(h=>h.reductique)){
-    lines.push('Absence de traits r\xe9ductiques');
+  // ── Traits réductiques ────────────────────────────────────────────────────
+  const anyReduct=horizons.some(h=>h.reductique);
+  if(!anyReduct){
+    lines.push('Absence de traits réductiques.');
   } else {
-    const {groups,lastH}=groupTrait('reductique');
-    groups.forEach(g=>lines.push(phraseRange('Traits r\xe9ductiques',g,lastH)));
+    const groups=groupTrait('reductique');
+    groups.forEach(g=>{
+      const sig=g.reductSig===true?' (significatifs)':' (non significatifs)';
+      lines.push('Présence de traits réductiques '+range(g)+sig+'.');
+    });
   }
 
-  // Histique
+  // ── Horizon histique ──────────────────────────────────────────────────────
   const fh=horizons.find(h=>h.histique);
-  if(fh) lines.push('Horizon histique \xe0 partir de '+fh.profDebut+' cm');
-
-  // Cailloux
-  if(horizons.some(h=>h.cailloux)){
-    const {groups,lastH}=groupTrait('cailloux');
-    groups.forEach(g=>lines.push(phraseRange('Pr\xe9sence de cailloux',g,lastH)));
+  if(fh){
+    const toEnd=fh.profFin===lastH.profFin;
+    const span=toEnd?'à partir de '+fh.profDebut+' cm':'de '+fh.profDebut+' à '+fh.profFin+' cm';
+    lines.push('Horizon histique (tourbeux) observé '+span+'.');
   }
 
-  // Refus tari\xe8re
-  const frt=horizons.find(h=>h.refusTariere);
-  if(frt) lines.push('Refus de tari\xe8re \xe0 '+frt.profDebut+' cm');
+  // ── Éléments grossiers ────────────────────────────────────────────────────
+  if(horizons.some(h=>h.cailloux)){
+    const groups=groupTrait('cailloux');
+    groups.forEach(g=>lines.push('Présence d\u2019éléments grossiers (cailloux) '+range(g)+'.'));
+  }
 
-  // Observations
+  // ── Refus de tarière ─────────────────────────────────────────────────────
+  const frt=horizons.find(h=>h.refusTariere);
+  if(frt){
+    const prof=frt.profFin||frt.profDebut;
+    const mention=prof<80?' (profondeur insuffisante pour l\u2019évaluation de la règle 4)':'';
+    lines.push('Refus de tarière à '+prof+' cm'+mention+'.');
+  }
+
+  // ── Observations ─────────────────────────────────────────────────────────
   if(observations&&observations.trim())
     observations.split('\n').map(l=>l.trim()).filter(Boolean).forEach(l=>lines.push(l));
 
-  return lines.filter(Boolean).join(' ; ');
+  return lines.filter(Boolean).join('\n');
 }
 
 
@@ -1172,7 +1212,9 @@ function SondageView({sondage, onUpdate, onDelete, canDelete, onAddBis}){
   const updateH=(id,f,v)=>set('horizons',sondage.horizons.map(h=>h.id===id?{...h,[f]:v}:h));
   const addH=()=>{
     const last=sondage.horizons[sondage.horizons.length-1];
-    set('horizons',[...sondage.horizons,{...newHorizon(),profDebut:last?last.profFin:0,profFin:(last?last.profFin:0)+30}]);
+    const debut=last?last.profFin:0;
+    const fin=sondage.profSondage>debut?sondage.profSondage:debut+30;
+    set('horizons',[...sondage.horizons,{...newHorizon(),profDebut:debut,profFin:fin}]);
   };
   const delH=(id)=>{if(sondage.horizons.length>1) set('horizons',sondage.horizons.filter(h=>h.id!==id));};
   const handlePhoto=(e)=>{
@@ -1230,7 +1272,7 @@ function SondageView({sondage, onUpdate, onDelete, canDelete, onAddBis}){
       {/* Horizons + Description */}
       <div className="card">
         <div className="card-head">
-          <span>Horizons ({sondage.horizons.length}) &amp; Description</span>
+          <span>Description des horizons</span>
         </div>
         <div className="card-body" style={{padding:'10px 6px'}}>
           <div style={{overflowX:'auto'}}>
@@ -1261,8 +1303,8 @@ function SondageView({sondage, onUpdate, onDelete, canDelete, onAddBis}){
                 {sondage.horizons.map((h,i)=>(
                   <tr key={h.id}>
                     <td style={{fontWeight:700,color:'var(--g-dark)'}}>H{i+1}</td>
-                    <td><input className="ci" type="number" min="0" max="300" value={h.profDebut} onChange={e=>updateH(h.id,'profDebut',parseInt(e.target.value)||0)} style={{width:56}}/></td>
-                    <td><input className="ci" type="number" min="0" max="300" value={h.profFin} onChange={e=>updateH(h.id,'profFin',parseInt(e.target.value)||0)} style={{width:56}}/></td>
+                    <td><input className="ci" type="number" min="0" max="300" value={h.profDebut} onChange={e=>updateH(h.id,'profDebut',e.target.value===''?0:parseInt(e.target.value,10))} style={{width:56}}/></td>
+                    <td><input className="ci" type="number" min="0" max="300" value={h.profFin} onChange={e=>updateH(h.id,'profFin',e.target.value===''?0:parseInt(e.target.value,10))} style={{width:56}}/></td>
                     <td className="left"><input className="ci ci-text" value={h.texture} onChange={e=>updateH(h.id,'texture',e.target.value)} placeholder="limon…" style={{minWidth:70}}/></td>
                     <td><input type="checkbox" checked={!!h.cailloux} onChange={e=>updateH(h.id,'cailloux',e.target.checked)} style={{accentColor:'var(--g-main)',width:16,height:16,cursor:'pointer'}}/></td>
                     <td><input type="checkbox" checked={!!h.redoxique} onChange={e=>updateH(h.id,'redoxique',e.target.checked)} style={{accentColor:'var(--g-main)',width:16,height:16,cursor:'pointer'}}/></td>
@@ -1279,13 +1321,21 @@ function SondageView({sondage, onUpdate, onDelete, canDelete, onAddBis}){
             </table>
           </div>
           <div className="tfoot-row"><button className="btn btn-outline btn-sm" onClick={addH}>+ Ajouter un horizon</button></div>
+          {sondage.horizons.length>0&&(()=>{
+            const last=sondage.horizons[sondage.horizons.length-1];
+            return last.profFin!==sondage.profSondage?(
+              <div style={{margin:'6px 8px',padding:'6px 12px',background:'#FFF8E1',border:'1px solid #FFD54F',borderRadius:4,fontSize:12,color:'#7A5E00'}}>
+                ⚠ La profondeur de fin du dernier horizon ({last.profFin} cm) ne correspond pas à la profondeur totale du sondage ({sondage.profSondage} cm).
+              </div>
+            ):null;
+          })()}
           <div style={{padding:'10px 8px 4px'}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
               <div className="hint">Générée à partir des horizons — modifiable librement.</div>
               <button className="btn btn-primary btn-sm" onClick={()=>set('description',genDescription(sondage.horizons,sondage.observations||''))}>↺ Générer description</button>
             </div>
             <textarea className="finput" value={sondage.description} onChange={e=>set('description',e.target.value)}
-              style={{width:'100%',minHeight:70}} placeholder="Cliquer sur ↺ Générer description ou saisir manuellement…"/>
+              style={{width:'100%',minHeight:70,whiteSpace:'pre-wrap'}} placeholder="Cliquer sur ↺ Générer description ou saisir manuellement…"/>
             <div style={{marginTop:10,marginBottom:4,fontSize:12,color:'var(--text2)'}}>Observations complémentaires</div>
             <textarea className="finput" value={sondage.observations||''} onChange={e=>set('observations',e.target.value)}
               style={{width:'100%',minHeight:40}} placeholder="Observations terrain supplémentaires…"/>
@@ -1297,16 +1347,11 @@ function SondageView({sondage, onUpdate, onDelete, canDelete, onAddBis}){
       <div className="card">
         <div className="card-head">
           <span>Type de sol GEPPA</span>
-          <div style={{display:'flex',gap:8,alignItems:'center'}}>
-            {sondage.geppa&&(
-              <span className="badge" style={{background:ZH_GEPPA.has(sondage.geppa)?'#BDD7EE':'#E2EFD9',color:ZH_GEPPA.has(sondage.geppa)?'#1F4E79':'#375623'}}>
-                {sondage.geppa}
-              </span>
-            )}
-            {geppaCalc
-              ? <div style={{marginTop:6,fontSize:12,color:'var(--text2)'}}>GEPPA conseillé : <strong style={{color:'var(--g-dark)',background:'var(--g-bg)',padding:'1px 6px',borderRadius:3}}>{geppaCalc}</strong></div>
-              : <div style={{marginTop:6,fontSize:12,color:'var(--text2)',fontStyle:'italic'}}>Saisissez des horizons pour une suggestion GEPPA.</div>}
-          </div>
+          {sondage.geppa&&(
+            <span className="badge" style={{background:ZH_GEPPA.has(sondage.geppa)?'#BDD7EE':SPECIAL_GEPPA[sondage.geppa]?.verdict==='indet'?'#FFE699':'#E2EFD9',color:ZH_GEPPA.has(sondage.geppa)?'#1F4E79':SPECIAL_GEPPA[sondage.geppa]?.verdict==='indet'?'#7A5E00':'#375623'}}>
+              {sondage.geppa}
+            </span>
+          )}
         </div>
         <div className="card-body">
           <img src={'data:image/png;base64,'+GEPPA_B64} alt="Schéma GEPPA"
@@ -1329,21 +1374,54 @@ function SondageView({sondage, onUpdate, onDelete, canDelete, onAddBis}){
               </div>
             ))}
           </div>
-          <div style={{marginTop:10,fontSize:12,color:'var(--text2)'}}>
+          <div style={{marginTop:10,fontSize:12,fontWeight:700,color:'var(--text2)'}}>Cas particuliers</div>
+          <div style={{display:'flex',gap:6,marginTop:6,flexWrap:'wrap'}}>
+            {Object.keys(SPECIAL_GEPPA).map(k=>{
+              const sel=sondage.geppa===k;
+              return <div key={k} className={'geppa-item'+(sel?' sel':'')}
+                onClick={()=>set('geppa',sel?'':k)}
+                style={{minWidth:90,padding:'6px 10px'}}>
+                <span className="geppa-lbl" style={{fontSize:12}}>{k}</span>
+                <span className="geppa-zh" style={{color:SPECIAL_GEPPA[k].verdict==='non'?'#375623':'#7A5E00'}}>
+                  {SPECIAL_GEPPA[k].verdict==='non'?'Non ZH':'Indét.'}
+                </span>
+              </div>;
+            })}
+          </div>
+          <div style={{marginTop:12,padding:'8px 12px',background:'var(--g-bg)',borderRadius:6,border:'1px solid var(--bl)'}}>
             {geppaCalc
-              ? <>GEPPA conseillé d'après les horizons : <strong style={{color:'var(--g-dark)',background:'var(--g-bg)',padding:'1px 6px',borderRadius:3}}>{geppaCalc}</strong></>
-              : <em>Saisissez des horizons pour obtenir une suggestion GEPPA.</em>}
+              ? <span style={{fontSize:13}}>Classe suggérée d'après les horizons : <strong style={{color:'var(--g-dark)',fontSize:15}}>{geppaCalc}</strong></span>
+              : <em style={{fontSize:12,color:'var(--text2)'}}>Saisissez des horizons pour obtenir une suggestion de classe GEPPA.</em>}
           </div>
         </div>
       </div>
 
       {/* Refus de tarière → sondage bis */}
-      {sondage.horizons.some(h=>h.refusTariere) && onAddBis && (
-        <div style={{margin:'8px 0',padding:'10px 14px',background:'#FFF8E1',border:'1px solid #FFD54F',borderRadius:6,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
-          <span style={{fontSize:13,color:'#6D4C00'}}>⚠ Refus de tarière — un sondage bis est recommandé.</span>
-          <button className="btn btn-primary btn-sm" style={{whiteSpace:'nowrap',flexShrink:0}} onClick={onAddBis}>+ Créer un sondage bis</button>
-        </div>
-      )}
+      {sondage.horizons.some(h=>h.refusTariere) && onAddBis && (()=>{
+        const refusH = sondage.horizons.find(h=>h.refusTariere);
+        const refusProf = refusH ? refusH.profFin : null;
+        const avant80 = refusProf!==null && refusProf<80;
+        return (
+          <div style={{margin:'12px 0',borderRadius:8,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,.12)'}}>
+            <div style={{background:avant80?'#E65100':'#F57C00',padding:'10px 16px',display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:20}}>⚠️</span>
+              <div>
+                <div style={{fontWeight:700,fontSize:14,color:'#FFF'}}>
+                  Refus de tarière{refusProf!==null?' à '+refusProf+' cm':''}
+                </div>
+                <div style={{fontSize:12,color:'rgba(255,255,255,.85)',marginTop:2}}>
+                  {avant80
+                    ? 'Profondeur < 80 cm — règle 4 (IVd) non évaluable. Un sondage bis est nécessaire.'
+                    : 'Règle 4 potentiellement affectée. Un sondage bis est recommandé.'}
+                </div>
+              </div>
+            </div>
+            <div style={{background:'#FFF3E0',padding:'10px 16px',display:'flex',alignItems:'center',justifyContent:'flex-end'}}>
+              <button className="btn btn-primary btn-sm" onClick={onAddBis}>+ Créer un sondage bis</button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Résultat */}
       <PedoResultCard result={result}/>
@@ -1505,7 +1583,7 @@ async function exportWordProject(project){
         // Row 1: titre
         trow([
           tc(photoChildren, {width:PHOTO_W, borders:{top:dblBorder,left:dblBorder,bottom:dblBorder,right:dblBorder}, rowSpan:4}),
-          tc(para(run(s.num+" – Critère pédologique", {bold:true}), {indent:{left:113}}),
+          tc(para(run("Sondage n°"+s.num+" – Critère pédologique", {bold:true}), {indent:{left:113}}),
             {fill:H_FILL, width:MID_W+RIGHT_W, colSpan:2, borders:dbl, vAlign:VerticalAlign.CENTER}),
         ], 420),
 
@@ -1589,7 +1667,8 @@ async function exportWordProject(project){
     const blob = await Packer.toBlob(doc);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = (project.nom||"rapport").replace(/[^a-zA-Z0-9]/g,"_")+"_pedologique_ZH.docx";
+    const clean = s => (s||'').replace(/[^a-zA-Z0-9À-ÿ]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'');
+    a.download = `${clean(project.nom)}_${clean(project.client)}_Rapport_Pedologique.docx`;
     a.click();
 
   } catch(e){
@@ -2232,6 +2311,7 @@ function BotaContent({project, placettes, safeIdx, setIdx, pl, result, updPl, ad
     };
     reader.readAsDataURL(f);
   };
+  const isDupEspece=(rows,rowId,val)=>val&&val.trim()&&rows.filter(r=>r.id!==rowId&&(r.espece||'').trim().toLowerCase()===(val||'').trim().toLowerCase()).length>0;
   const updateRow=(rowId,field,value)=>updPl(p=>({...p,rows:p.rows.map(r=>{
     if(r.id!==rowId) return r;
     if(field==="recouvrement"){const v=parseFloat(value);if(!isNaN(v)){const rest=100-strateTotal(p.rows,r.strate,rowId);if(v>rest)return{...r,recouvrement:String(Math.max(0,rest))};}}
@@ -2328,7 +2408,10 @@ function BotaContent({project, placettes, safeIdx, setIdx, pl, result, updPl, ad
                 {pl.rows.length===0&&(<tr><td colSpan={4} style={{padding:'16px',textAlign:'center',color:'var(--text2)',fontSize:13,fontStyle:'italic'}}>Cliquez sur "+ Ajouter une espèce" pour commencer.</td></tr>)}
                 {pl.rows.map(row=>(
                   <tr key={row.id} className={isZH(row.espece)?'zh-row':''}>
-                    <td><EspeceInput value={row.espece||''} onChange={v=>updateRow(row.id,'espece',v)}/></td>
+                    <td>
+                      <EspeceInput value={row.espece||''} onChange={v=>updateRow(row.id,'espece',v)}/>
+                      {isDupEspece(pl.rows,row.id,row.espece)&&<div style={{fontSize:11,color:'#B00',marginTop:2}}>⚠ Doublon</div>}
+                    </td>
                     <td style={{padding:'4px 6px'}}>
                       <div style={{display:'flex',gap:2,justifyContent:'center'}}>
                         {STRATES.map(s=>(
