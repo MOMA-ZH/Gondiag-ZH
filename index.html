@@ -350,7 +350,7 @@ function annotateGeppa(geppaClass) {
       if (geppaClass && GEPPA_COLS[geppaClass]) {
         const [x1, x2] = GEPPA_COLS[geppaClass];
         const zhCls = new Set(['IVd','Va','Vb','Vc','Vd','VIa','VIb','VIc','VId','H']);
-        ctx.strokeStyle = zhCls.has(geppaClass) ? '#BDD7EE' : '#92D050';
+        ctx.strokeStyle = '#3399FF';
         ctx.lineWidth = 3;
         ctx.strokeRect(x1 + 1, 2, x2 - x1 - 2, GEPPA_IMG_H - 4);
       }
@@ -901,34 +901,31 @@ async function exportWord(project){
             para([run("Habitat : ",{bold:true,sz:20}), run(p.habitat||"—",{sz:18})], {spacing:{before:120, after:60}, indent:{left:113}}),
             para([run("EUNIS : ",{bold:true,sz:20}), run(formatHabitat(EUNIS_LIST,p.eunis),{sz:18})], {spacing:{after:60}, indent:{left:113}}),
             para([run("Corine Biotope : ",{bold:true,sz:20}), run(formatHabitat(CORINE_LIST,p.corine),{sz:18})], {spacing:{after:200}, indent:{left:113}}),
-            // Cadre photo (image si disponible, cadre vide sinon)
-            new Table({
-              width:{size:6800, type:WidthType.DXA},
-              rows:[new TableRow({
-                height:{value:4800, rule:HeightRule.EXACT},
-                children:[new TableCell({
-                  width:{size:6800, type:WidthType.DXA},
-                  shading:{type:ShadingType.CLEAR, fill: p.photoDataUri ? "FFFFFF" : "F5F5F5", color:"auto"},
-                  borders:{
-                    top:{style:BorderStyle.SINGLE, size:4, color:"CCCCCC"},
-                    bottom:{style:BorderStyle.SINGLE, size:4, color:"CCCCCC"},
-                    left:{style:BorderStyle.SINGLE, size:4, color:"CCCCCC"},
-                    right:{style:BorderStyle.SINGLE, size:4, color:"CCCCCC"},
-                  },
-                  verticalAlign:VerticalAlign.CENTER,
-                  margins:{top:0,bottom:0,left:0,right:0},
-                  children:[new Paragraph({
-                    alignment: AlignmentType.CENTER,
-                    spacing:{before:0,after:0},
-                    children: p.photoDataUri ? [new ImageRun({
-                      data: p.photoDataUri,
-                      transformation: {width:316, height:210},
-                      type: (p.photoType||"image/jpeg").split("/")[1]
-                    })] : [new TextRun({text:""})]
+            // Cadre photo
+            p.photoDataUri
+              ? new Paragraph({
+                  alignment: AlignmentType.LEFT,
+                  spacing:{before:0,after:0},
+                  children:[new ImageRun({
+                    data: p.photoDataUri,
+                    transformation: {width:302, height:213},
+                    type: (p.photoType||"image/jpeg").split("/")[1]
                   })]
-                })]
-              })]
-            }),
+                })
+              : new Table({
+                  width:{size:6800, type:WidthType.DXA},
+                  rows:[new TableRow({
+                    height:{value:4800, rule:HeightRule.EXACT},
+                    children:[new TableCell({
+                      width:{size:6800, type:WidthType.DXA},
+                      shading:{type:ShadingType.CLEAR, fill:"F5F5F5", color:"auto"},
+                      borders:{top:{style:BorderStyle.SINGLE,size:4,color:"CCCCCC"},bottom:{style:BorderStyle.SINGLE,size:4,color:"CCCCCC"},left:{style:BorderStyle.SINGLE,size:4,color:"CCCCCC"},right:{style:BorderStyle.SINGLE,size:4,color:"CCCCCC"}},
+                      verticalAlign:VerticalAlign.CENTER,
+                      margins:{top:0,bottom:0,left:0,right:0},
+                      children:[para(run(""))]
+                    })]
+                  })]
+                }),
           ], {width:7490, borders:tealBorder}),
           tc(rightCellChildren, {width:6468, borders:tealBorder}),
         ], 800),
@@ -1255,7 +1252,7 @@ function SondageView({sondage, onUpdate, onDelete, canDelete, onAddBis}){
     e.target.value='';
     const reader=new FileReader();
     reader.onload=ev=>{
-      compressImage(ev.target.result, 760, 1280, 0.82, 127/213).then(({dataUri,w,h})=>{
+      compressImage(ev.target.result, 1200, 2400, 0.82, null).then(({dataUri,w,h})=>{
         onUpdate(s=>({...s, photo:dataUri, photoW:w, photoH:h}));
       });
     };
@@ -1594,16 +1591,27 @@ async function exportWordProject(project){
     const vFill = r.verdict==='zh' ? "BDD7EE" : r.verdict==='indet' ? "F2F2F2" : "92D050";
     const geppaFill = H_FILL;  // toujours vert clair du modèle
 
-    // Photo
-    const PHOTO_W = 2872, MID_W = 5498, RIGHT_W = 5588;
+    // ── Hauteurs des rows (pour calibrer la photo) ────────────────────────────
+    const R1_H = 420;  // titre
+    const R3_H = 700;  // GEPPA + verdict
+    // Row horizons : header 560 + 520 par horizon (minimum)
+    const R2_H = Math.max(2000, 560 + s.horizons.length * 520);
+    // Row description : 400 + 200 par ligne + GEPPA image 2714 twips
+    const descLines = (s.description||"").split("\n").filter(Boolean).length;
+    const R2B_H = Math.max(3500, 400 + descLines*200 + 2714);
+    const TOTAL_H = R1_H + R2_H + R2B_H + R3_H;
 
-    // Cadre photo fixe (comme botanique) : toujours présent, fond gris si pas de photo
-    // Photo : ajustée à la largeur de la colonne, ratio préservé
-    // PHOTO_W = 2872 twips → ~133pt utilisables (marges incluses)
-    const FRAME_W_PT = 133;
-    let photoChildren = [
-      // Cadre gris vide par défaut
-      new Table({
+    const PHOTO_W = 2872, MID_W = 5498, RIGHT_W = 5588;
+    const cellWPt = Math.round((PHOTO_W - 160) / 1440 * 72); // ~120pt (marges cellule 80+80)
+    const photoHPt = Math.round(TOTAL_H / 1440 * 72);
+
+    // Photo annotée avec horizons
+    const annotatedPhoto = await buildPhotoWithHorizons(s, cellWPt, photoHPt);
+    let photoChildren;
+    if(annotatedPhoto){
+      photoChildren = [annotatedPhoto];
+    } else {
+      photoChildren = [new Table({
         width:{size:PHOTO_W-160, type:WidthType.DXA},
         rows:[new TableRow({
           height:{value:4800, rule:HeightRule.EXACT},
@@ -1616,32 +1624,98 @@ async function exportWordProject(project){
             children:[para(run(""))]
           })]
         })]
-      })
-    ];
-    if(s.photo && s.photo.startsWith("data:")){
-      try {
-        const b64 = s.photo.split(",")[1];
-        const binary = atob(b64);
-        const bytes = new Uint8Array(binary.length);
-        for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
-        const isJpeg = s.photo.startsWith("data:image/jpeg") || s.photo.startsWith("data:image/jpg");
-        const ratio = 127/213;
-        const dispW = FRAME_W_PT;
-        const dispH = Math.round(FRAME_W_PT / ratio);
-        // Replace default grey frame with actual photo, no outer table needed
-        photoChildren = [new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing:{before:0,after:0},
-          children:[new ImageRun({
-            data: bytes.buffer,
-            transformation:{width:dispW, height:dispH},
-            type: isJpeg ? "jpg" : "png"
-          })]
-        })];
-      } catch(e){ console.warn("Photo embed error:", e); }
+      })];
     }
 
-    // Description lines
+    // ── Photo annotée avec horizons ──────────────────────────────────────────
+    async function buildPhotoWithHorizons(s, cellWPt, cellHPt){
+      if(!s.photo || !s.photo.startsWith("data:")) return null;
+
+      const lineColor  = '#3399FF';
+      const labelColor = '#3399FF';
+
+      const photoHaut = s.photoHaut||0;
+      const photoBas  = s.photoBas||(s.horizons.length>0?s.horizons[s.horizons.length-1].profFin:100);
+      const profTotal = Math.max(1, photoBas - photoHaut);
+
+      const scale = 3;
+      const cW = cellWPt * scale;
+      const cH = cellHPt * scale;
+
+      // 0.3cm = ~8.5pt en dépassement à droite de la photo dans la zone blanche
+      const overlapPt = 8.5;
+      const photoZoneW = Math.round((cellWPt - overlapPt) * scale * 0.82); // photo ~82% de (cellW - overlap)
+      const labelZoneX = photoZoneW + Math.round(overlapPt * scale * 0.3); // labels après le dépassement
+
+      const annotated = await new Promise(resolve=>{
+        const img = new window.Image();
+        img.onload = ()=>{
+          const canvas = document.createElement('canvas');
+          canvas.width = cW; canvas.height = cH;
+          const ctx = canvas.getContext('2d');
+
+          // Fond blanc pour la zone labels
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, cW, cH);
+
+          // Photo dans la zone gauche, étirée sur toute la hauteur
+          ctx.drawImage(img, 0, 0, photoZoneW, cH);
+
+          // Calcul des positions Y des lignes de séparation
+          const lineYs = s.horizons.map((h,i)=>{
+            if(i===0) return 0; // début = haut de photo
+            const pct = (h.profDebut - photoHaut) / profTotal;
+            return Math.round(Math.max(0, Math.min(1, pct)) * cH);
+          });
+          lineYs.push(cH); // fin = bas de photo
+
+          // Lignes de séparation — dépassent de 0,3cm dans la zone blanche
+          const lineEndX = photoZoneW + Math.round(overlapPt * scale);
+          s.horizons.forEach((h,i)=>{
+            if(i===0) return;
+            const y = lineYs[i];
+            ctx.strokeStyle = lineColor;
+            ctx.lineWidth = 2.5 * scale;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(lineEndX, y);
+            ctx.stroke();
+          });
+
+          // Labels centrés dans chaque horizon
+          ctx.font = `bold ${14*scale}px Arial`;
+          s.horizons.forEach((h,i)=>{
+            const yTop    = lineYs[i];
+            const yBottom = lineYs[i+1];
+            const yMid    = Math.round((yTop + yBottom) / 2);
+            ctx.fillStyle = labelColor;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('H'+(i+1), labelZoneX, yMid);
+          });
+
+          resolve(canvas.toDataURL('image/jpeg', 0.88));
+        };
+        img.src = s.photo;
+      });
+
+      // Convertir en bytes
+      const b64 = annotated.split(",")[1];
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+
+      return new Paragraph({
+        alignment: AlignmentType.LEFT,
+        indent: {left: 113},
+        spacing: {before:0, after:0},
+        children:[new ImageRun({
+          data: bytes.buffer,
+          transformation: {width: cellWPt, height: cellHPt},
+          type: "jpg"
+        })]
+      });
+    }
     const descText = s.description || "";
     const lines = descText.split("\n").map(l=>l.trim()).filter(Boolean);
     const descParas = [
@@ -1659,7 +1733,7 @@ async function exportWordProject(project){
           tc(photoChildren, {width:PHOTO_W, borders:{top:dblBorder,left:dblBorder,bottom:dblBorder,right:dblBorder}, rowSpan:4}),
           tc(para(run("Sondage n°"+s.num+" – Critère pédologique", {bold:true}), {indent:{left:113}}),
             {fill:H_FILL, width:MID_W+RIGHT_W, colSpan:2, borders:dbl, vAlign:VerticalAlign.CENTER}),
-        ], 420),
+        ], R1_H),
 
         // Row 2: horizons
         trow([
@@ -1669,7 +1743,7 @@ async function exportWordProject(project){
             buildInnerTable(s.horizons),
             para(run("")),
           ], {width:MID_W+RIGHT_W, colSpan:2, borders:dbl}),
-        ], 0),
+        ], R2_H),
 
         // Row 2b: description + GEPPA image
         trow([
@@ -1680,7 +1754,7 @@ async function exportWordProject(project){
             ]}),
             para(run("")),
           ], {width:MID_W+RIGHT_W, colSpan:2, borders:dbl}),
-        ], 0),
+        ], R2B_H),
 
         // Row 3: GEPPA + verdict
         trow([
@@ -1690,7 +1764,7 @@ async function exportWordProject(project){
           ], {fill:geppaFill, width:MID_W, borders:dbl, vAlign:VerticalAlign.CENTER}),
           tc(para(run(verdict, {bold:true}), {jc:AlignmentType.CENTER}),
             {fill:vFill, width:RIGHT_W, borders:dbl, vAlign:VerticalAlign.CENTER}),
-        ], 700),
+        ], R3_H),
       ],
       layout:TableLayoutType.FIXED,
     });
