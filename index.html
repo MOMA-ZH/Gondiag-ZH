@@ -164,11 +164,11 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 
 /* ── Nav placette/sondage ── */
 .pl-nav{background:var(--white);border-bottom:.5px solid var(--border);padding:8px 12px;display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap}
-.pl-nav-pills{display:flex;gap:5px;flex:1;flex-wrap:wrap;min-width:0}
-.pl-pill{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:20px;border:.5px solid var(--border);background:var(--surf1);cursor:pointer;font-size:12px;font-weight:500;color:var(--text2);transition:all .12s;white-space:nowrap}
+.pl-nav-pills{display:flex;gap:7px;flex:1;flex-wrap:wrap;min-width:0}
+.pl-pill{display:flex;align-items:center;gap:6px;padding:9px 15px;border-radius:20px;border:.5px solid var(--border);background:var(--surf1);cursor:pointer;font-size:15px;font-weight:600;color:var(--text2);transition:all .12s;white-space:nowrap;min-height:40px}
 .pl-pill:hover{border-color:var(--g-main);background:var(--g-bg)}
 .pl-pill.active{background:var(--g-dark);border-color:var(--g-dark);color:#fff}
-.pl-pill .pp-badge{font-size:10px;padding:1px 5px;border-radius:3px;font-weight:700}
+.pl-pill .pp-badge{font-size:11px;padding:2px 7px;border-radius:3px;font-weight:700}
 .pl-pill.active .pp-badge{background:rgba(255,255,255,.2);color:#fff}
 .pl-pill .pp-badge.zh{background:var(--zh-bg);color:var(--zh-col)}
 .pl-pill .pp-badge.nzh{background:var(--nzh-bg);color:var(--nzh-col)}
@@ -513,6 +513,7 @@ function compressImage(dataUri, maxW, maxH, quality, cropRatio){
   // cropRatio = targetW/targetH — si fourni, rogner au centre avant de redimensionner
   return new Promise(resolve=>{
     const img=new window.Image();
+    img.onerror=()=>resolve(null);
     img.onload=()=>{
       let sw=img.naturalWidth, sh=img.naturalHeight;
       let sx=0, sy=0;
@@ -550,34 +551,31 @@ const GEPPA_IMG_H = 282;
 const GEPPA_COLS = {'IIIa':[70,106],'IIIb':[106,142],'IIIc':[142,177],'IVa':[177,211],'IVb':[211,244],'IVc':[244,281],'IVd':[281,316],'Va':[316,350],'Vb':[350,386],'Vc':[386,420],'Vd':[420,454],'VIc':[454,489],'VId':[489,523],'H':[562,628]};
 
 function annotateGeppa(geppaClass) {
+  // Retourne une dataURL PNG (string) — type le plus fiable pour docx ImageRun.
   return new Promise((resolve) => {
+    const fallback = 'data:image/png;base64,' + window.GEPPA_B64;
     const img = new window.Image();
+    img.onerror = () => resolve(fallback);
     img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = GEPPA_IMG_W;
-      canvas.height = GEPPA_IMG_H;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-      if (geppaClass && GEPPA_COLS[geppaClass]) {
-        const [x1, x2] = GEPPA_COLS[geppaClass];
-        const zhCls = new Set(['IVd','Va','Vb','Vc','Vd','VIa','VIb','VIc','VId','H']);
-        ctx.strokeStyle = '#3399FF';
-        ctx.lineWidth = 3;
-        ctx.strokeRect(x1 + 1, 2, x2 - x1 - 2, GEPPA_IMG_H - 4);
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = GEPPA_IMG_W;
+        canvas.height = GEPPA_IMG_H;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        if (geppaClass && GEPPA_COLS[geppaClass]) {
+          const [x1, x2] = GEPPA_COLS[geppaClass];
+          ctx.strokeStyle = '#3399FF';
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x1 + 1, 2, x2 - x1 - 2, GEPPA_IMG_H - 4);
+        }
+        resolve(canvas.toDataURL('image/png'));
+      } catch (err) {
+        console.warn('annotateGeppa fallback:', err);
+        resolve(fallback);
       }
-      canvas.toBlob(blob => {
-        const reader = new FileReader();
-        reader.onload = e => {
-          const b64 = e.target.result.split(',')[1];
-          const binary = atob(b64);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          resolve(bytes);
-        };
-        reader.readAsDataURL(blob);
-      }, 'image/png');
     };
-    img.src = 'data:image/png;base64,' + window.GEPPA_B64;
+    img.src = fallback;
   });
 }
 
@@ -648,6 +646,7 @@ function HabitatSelect({value, onChange, list, placeholder}){
   const [query, setQuery] = useState("");
   const [pos, setPos] = useState({top:0,left:0,width:300});
   const wrapRef = useRef();
+  const menuRef = useRef();
   const inputRef = useRef();
   const isMobile = window.innerWidth <= 600;
 
@@ -660,7 +659,11 @@ function HabitatSelect({value, onChange, list, placeholder}){
 
   useEffect(()=>{
     if(!open) return;
-    const close = (e)=>{ if(wrapRef.current&&!wrapRef.current.contains(e.target)){ setOpen(false); setQuery(""); } };
+    const close = (e)=>{
+      if(wrapRef.current&&wrapRef.current.contains(e.target)) return;
+      if(menuRef.current&&menuRef.current.contains(e.target)) return;
+      setOpen(false); setQuery("");
+    };
     document.addEventListener("mousedown", close);
     document.addEventListener("touchstart", close, {passive:true});
     return ()=>{ document.removeEventListener("mousedown", close); document.removeEventListener("touchstart", close); };
@@ -682,7 +685,7 @@ function HabitatSelect({value, onChange, list, placeholder}){
   const pick = (c)=>{ onChange(c); setOpen(false); setQuery(""); };
 
   const dropdownContent = (
-    <div style={isMobile ? {
+    <div ref={menuRef} style={isMobile ? {
       position:"fixed",bottom:0,left:0,right:0,zIndex:9999,
       background:"var(--white)",borderRadius:"12px 12px 0 0",
       boxShadow:"0 -4px 24px rgba(0,0,0,.2)",
@@ -741,12 +744,17 @@ function EspeceInput({value, onChange}){
   const [filtered, setFiltered] = useState([]);
   const [pos, setPos] = useState({top:0,left:0,width:280});
   const wrapRef = useRef();
+  const menuRef = useRef();
   const matched = isZH(value);
   const isMobile = window.innerWidth <= 600;
 
   useEffect(()=>{
     if(!open) return;
-    const close = (e)=>{ if(wrapRef.current&&!wrapRef.current.contains(e.target)){ setOpen(false); } };
+    const close = (e)=>{
+      if(wrapRef.current&&wrapRef.current.contains(e.target)) return;
+      if(menuRef.current&&menuRef.current.contains(e.target)) return;
+      setOpen(false);
+    };
     document.addEventListener('mousedown', close);
     document.addEventListener('touchstart', close, {passive:true});
     return ()=>{ document.removeEventListener('mousedown', close); document.removeEventListener('touchstart', close); };
@@ -783,7 +791,7 @@ function EspeceInput({value, onChange}){
   const pick = (l)=>{ onChange(l); setOpen(false); };
 
   const suggestions = (
-    <div style={isMobile ? {
+    <div ref={menuRef} style={isMobile ? {
       position:"fixed",bottom:0,left:0,right:0,zIndex:9999,
       background:"var(--white)",borderRadius:"12px 12px 0 0",
       boxShadow:"0 -4px 24px rgba(0,0,0,.2)",maxHeight:"50vh",overflowY:"auto",
@@ -903,6 +911,67 @@ function ResultCard({result}){
 }
 
 
+
+
+// ── Repacker DOCX (corrige l'ordre OPC + dossiers pour MS Word) ──────────────
+const _CRC_TABLE=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
+function _crc32(u8){let c=0xFFFFFFFF;for(let i=0;i<u8.length;i++)c=_CRC_TABLE[(c^u8[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+function _buildStoreZip(files){
+  const enc=new TextEncoder();const chunks=[];const central=[];let offset=0;
+  for(const f of files){
+    const nb=enc.encode(f.name);const crc=_crc32(f.data);const sz=f.data.length;
+    const lh=new Uint8Array(30+nb.length);const ld=new DataView(lh.buffer);
+    ld.setUint32(0,0x04034b50,true);ld.setUint16(4,20,true);ld.setUint16(6,0,true);ld.setUint16(8,0,true);
+    ld.setUint16(10,0,true);ld.setUint16(12,0x21,true);ld.setUint32(14,crc,true);ld.setUint32(18,sz,true);
+    ld.setUint32(22,sz,true);ld.setUint16(26,nb.length,true);ld.setUint16(28,0,true);lh.set(nb,30);
+    chunks.push(lh,f.data);
+    const ch=new Uint8Array(46+nb.length);const cd=new DataView(ch.buffer);
+    cd.setUint32(0,0x02014b50,true);cd.setUint16(4,20,true);cd.setUint16(6,20,true);cd.setUint16(8,0,true);
+    cd.setUint16(10,0,true);cd.setUint16(12,0,true);cd.setUint16(14,0x21,true);cd.setUint32(16,crc,true);
+    cd.setUint32(20,sz,true);cd.setUint32(24,sz,true);cd.setUint16(28,nb.length,true);cd.setUint32(42,offset,true);
+    ch.set(nb,46);central.push(ch);offset+=lh.length+f.data.length;
+  }
+  const cdStart=offset;let cdSize=0;for(const c of central)cdSize+=c.length;
+  for(const c of central)chunks.push(c);
+  const eo=new Uint8Array(22);const ed=new DataView(eo.buffer);
+  ed.setUint32(0,0x06054b50,true);ed.setUint16(8,files.length,true);ed.setUint16(10,files.length,true);
+  ed.setUint32(12,cdSize,true);ed.setUint32(16,cdStart,true);chunks.push(eo);
+  return new Blob(chunks,{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+}
+async function repackDocxBlob(blob){
+  try{
+    const buf=new Uint8Array(await blob.arrayBuffer());const dv=new DataView(buf.buffer);
+    let eocd=-1;for(let i=buf.length-22;i>=0;i--){if(dv.getUint32(i,true)===0x06054b50){eocd=i;break;}}
+    if(eocd<0)return blob;
+    const cdCount=dv.getUint16(eocd+10,true);const cdOffset=dv.getUint32(eocd+16,true);
+    const entries=[];let p=cdOffset;
+    for(let i=0;i<cdCount;i++){
+      if(dv.getUint32(p,true)!==0x02014b50)return blob;
+      const method=dv.getUint16(p+10,true);const compSize=dv.getUint32(p+20,true);
+      const nameLen=dv.getUint16(p+28,true);const extraLen=dv.getUint16(p+30,true);const commLen=dv.getUint16(p+32,true);
+      const lOff=dv.getUint32(p+42,true);
+      const name=new TextDecoder().decode(buf.subarray(p+46,p+46+nameLen));
+      entries.push({name,method,compSize,lOff});p+=46+nameLen+extraLen+commLen;
+    }
+    const files=[];
+    for(const e of entries){
+      if(e.name.endsWith('/'))continue;
+      if(dv.getUint32(e.lOff,true)!==0x04034b50)return blob;
+      const lNameLen=dv.getUint16(e.lOff+26,true);const lExtraLen=dv.getUint16(e.lOff+28,true);
+      const dataStart=e.lOff+30+lNameLen+lExtraLen;const comp=buf.subarray(dataStart,dataStart+e.compSize);
+      let data;
+      if(e.method===0){data=comp.slice();}
+      else if(e.method===8){
+        const ds=new DecompressionStream('deflate-raw');
+        const stream=new Blob([comp]).stream().pipeThrough(ds);
+        data=new Uint8Array(await new Response(stream).arrayBuffer());
+      } else return blob;
+      files.push({name:e.name,data});
+    }
+    files.sort((a,b)=>(a.name!=='[Content_Types].xml')-(b.name!=='[Content_Types].xml')||(a.name<b.name?-1:1));
+    return _buildStoreZip(files);
+  }catch(err){ console.warn('repackDocxBlob fallback:',err); return blob; }
+}
 
 // ── Export Word ───────────────────────────────────────────────────────────────
 function getLabel(list,code){ if(!code) return null; const e=list.find(([c])=>c===code); return e?e[1]:null; }
@@ -1109,7 +1178,7 @@ async function exportWord(project){
                   children:[new ImageRun({
                     data: p.photoDataUri,
                     transformation: {width:302, height:213},
-                    type: (p.photoType||"image/jpeg").split("/")[1]
+                    type: "jpg"
                   })]
                 })
               : new Table({
@@ -1179,7 +1248,8 @@ async function exportWord(project){
     });
 
     const doc = new Document({ sections });
-    const blob = await Packer.toBlob(doc);
+    let blob = await Packer.toBlob(doc);
+    blob = await repackDocxBlob(blob);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     const clean = s => (s||'').replace(/[^a-zA-Z0-9À-ÿ]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'');
@@ -1983,18 +2053,12 @@ async function exportWordProject(project){
         img.src = s.photo;
       });
 
-      // Convertir en bytes
-      const b64 = annotated.split(",")[1];
-      const binary = atob(b64);
-      const bytes = new Uint8Array(binary.length);
-      for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
-
       return new Paragraph({
         alignment: AlignmentType.LEFT,
         indent: {left: 113},
         spacing: {before:0, after:0},
         children:[new ImageRun({
-          data: bytes.buffer,
+          data: annotated,
           transformation: {width: cellWPt, height: cellHPt},
           type: "jpg"
         })]
@@ -2007,7 +2071,7 @@ async function exportWordProject(project){
       ...lines.map(l => para(run("– "+l, {sz:18}), {spacing:{after:40}, indent:{left:300, hanging:170}})),
     ];
 
-    const geppaBytes = await annotateGeppa(geppa);
+    const geppaImg = await annotateGeppa(geppa);
 
     return new Table({
       width:{size:PHOTO_W+MID_W+RIGHT_W, type:WidthType.DXA},
@@ -2034,7 +2098,7 @@ async function exportWordProject(project){
           tc([
             ...descParas,
             new Paragraph({alignment:AlignmentType.CENTER, children:[
-              new ImageRun({data:geppaBytes.buffer, transformation:{width:480, height:193}, type:"png"})
+              new ImageRun({data:geppaImg, transformation:{width:480, height:193}, type:"png"})
             ]}),
             para(run("")),
           ], {width:MID_W+RIGHT_W, colSpan:2, borders:dbl}),
@@ -2097,7 +2161,8 @@ async function exportWordProject(project){
     });
 
     const doc = new Document({sections});
-    const blob = await Packer.toBlob(doc);
+    let blob = await Packer.toBlob(doc);
+    blob = await repackDocxBlob(blob);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     const clean = s => (s||'').replace(/[^a-zA-Z0-9À-ÿ]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'');
@@ -2490,16 +2555,16 @@ function ProjectScreen({projectId, onBack}){
         <div className="export-bar">
           <button className="btn btn-primary btn-sm" style={{flex:2}} onClick={()=>exportWord(project)}>📄 Rapport Word</button>
           <button className="btn btn-ghost btn-sm" style={{flex:1,opacity:geoCountBota>0?1:.4}}
-            onClick={()=>geoCountBota>0?B_exportGeoJSON(project):alert('Aucune placette GPS.')}>🗺 GeoJSON</button>
-          <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={exportJSON}>💾 JSON</button>
+            onClick={()=>geoCountBota>0?B_exportGeoJSON(project):alert('Aucune placette GPS.')}>🗺 Carto</button>
+          <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={exportJSON}>💾 Sauvegarde</button>
         </div>
       )}
       {tab==='pedo' && sondages.length>0 && (
         <div className="export-bar">
           <button className="btn btn-primary btn-sm" style={{flex:2}} onClick={()=>exportWordProject(project)}>📄 Rapport Word</button>
           <button className="btn btn-ghost btn-sm" style={{flex:1,opacity:geoCountPedo>0?1:.4}}
-            onClick={()=>geoCountPedo>0?P_exportGeoJSON(project):alert('Aucun sondage GPS.')}>🗺 GeoJSON</button>
-          <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={exportJSON}>💾 JSON</button>
+            onClick={()=>geoCountPedo>0?P_exportGeoJSON(project):alert('Aucun sondage GPS.')}>🗺 Carto</button>
+          <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={exportJSON}>💾 Sauvegarde</button>
         </div>
       )}
 
@@ -2823,7 +2888,8 @@ function PhotoField({dataUri, onChange}){
   const handleFile = e=>{
     const file=e.target.files[0]; if(!file) return;
     const reader=new FileReader();
-    reader.onload=ev=>compressImage(ev.target.result,1200,900,.82).then(uri=>onChange(uri));
+    reader.onload=ev=>compressImage(ev.target.result,1200,900,.82).then(res=>{ if(res&&res.dataUri) onChange(res.dataUri); else alert('Image illisible (format non supporté ?). Essayez une photo JPEG/PNG.'); });
+    reader.onerror=()=>alert('Lecture du fichier impossible.');
     reader.readAsDataURL(file);
     e.target.value='';
   };
@@ -2836,7 +2902,7 @@ function PhotoField({dataUri, onChange}){
   return (
     <div className="photo-zone" onClick={()=>ref.current.click()}>
       <div style={{fontSize:13,color:'var(--text3)'}}>📷 Ajouter une photo</div>
-      <input ref={ref} type="file" accept="image/*" capture="environment" style={{display:'none'}} onChange={handleFile}/>
+      <input ref={ref} type="file" accept="image/*" style={{display:'none'}} onChange={handleFile}/>
     </div>
   );
 }
