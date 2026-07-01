@@ -23216,11 +23216,13 @@ function SondageView({
     const last = sondage.horizons[sondage.horizons.length - 1];
     const debut = last ? last.profFin : 0;
     const fin = sondage.profSondage > debut ? sondage.profSondage : debut + 30;
-    set('horizons', [...sondage.horizons, {
+    const nh = {
       ...newHorizon(),
       profDebut: debut,
       profFin: fin
-    }]);
+    };
+    set('horizons', [...sondage.horizons, nh]);
+    setEditHid(nh.id);
   };
   const delH = id => {
     if (sondage.horizons.length > 1) set('horizons', sondage.horizons.filter(h => h.id !== id));
